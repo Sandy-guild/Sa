@@ -1,0 +1,1217 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Pyspark ETL Pipeline \n",
+    "### Data Engineering Capstone Project\n",
+    "\n",
+    "#### Project Summary\n",
+    "This project builds an ETL pipeline for Immigration Data and City Temperature Data to form a final fact table to help answer questions on the relationships between the two datasets.\n",
+    "\n",
+    "The project follows the follow steps:\n",
+    "* Step 1: Scope the Project and Gather Data\n",
+    "* Step 2: Explore and Assess the Data\n",
+    "* Step 3: Define the Data Model\n",
+    "* Step 4: Run ETL to Model the Data\n",
+    "* Step 5: Complete Project Write Up"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 87,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Do all imports and installs here\n",
+    "import pandas as pd, re\n",
+    "from pyspark.sql import SparkSession\n",
+    "from pyspark.sql.functions import udf, lower, col"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Step 1: Scope the Project and Gather Data\n",
+    "\n",
+    "#### Scope \n",
+    "\n",
+    "This project consumes and aggregates I94 Immigration Data from the US National Tourism and Trade Office and Temperature Data from Kaggle to determine if there is a correlation between immigration patterns and temperature averages in cities. The data creates a fact table by joining on city. Spark is used in this process. \n",
+    "\n",
+    "#### Describe and Gather Data \n",
+    "When exploring data there are several factors you have to figure out about your data before combining, cleaning, and filtering it. Below are what columns are important in each of the datasets imported.\n",
+    "\n",
+    "#### Immigration Data: Us National Tourism and Trade Office (SAS7BDAT format)\n",
+    "I94 Immigration Data: This data comes from the US National Tourism and Trade Office. A data dictionary is included in the workspace. This is where the data comes from. There's a sample file so you can take a look at the data in csv format before reading it all in. You do not have to use the entire dataset, just use what you need to accomplish the goal you set at the beginning of the project.\n",
+    "\n",
+    "* cicid = city id\n",
+    "* i94yr = 4 digit year\n",
+    "* i94mon = numeric month\n",
+    "* i94cit = 3 digit code of origin city\n",
+    "* i94port = 3 character code of destination USA city\n",
+    "* arrdate = arrival date in the USA\n",
+    "* i94mode = 1 digit travel code\n",
+    "* depdate = departure date from the USA\n",
+    "* i94visa = reason for immigration\n",
+    "\n",
+    "#### Temperature data: Kaggle (csv format)\n",
+    "World Temperature Data: This dataset came from Kaggle. You can read more about it here.\n",
+    "\n",
+    "* AverageTemperature = average temperature\n",
+    "* AverageTemperatureUncertainy = average temperature uncertainty\n",
+    "* City = city name\n",
+    "* Country = country name\n",
+    "* Latitude= latitude\n",
+    "* Longitude = longitude\n",
+    "\n",
+    "#### Correct SAS Label Data\n",
+    "* i94port = numerical value\n",
+    "* city = city name"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Scoping the project\n",
+    "This section answers the following initial questions about the data. \n",
+    "1. How big is the data?\n",
+    "2. What columns are in the data?\n",
+    "3. What are the column formats"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 88,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Read in the data here\n",
+    "fname = '../../data/18-83510-I94-Data-2016/i94_apr16_sub.sas7bdat'\n",
+    "df_i94 = pd.read_sas(fname, 'sas7bdat', encoding=\"ISO-8859-1\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 89,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "(3096313, 28)"
+      ]
+     },
+     "execution_count": 89,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df_i94.shape"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 90,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Index(['cicid', 'i94yr', 'i94mon', 'i94cit', 'i94res', 'i94port', 'arrdate',\n",
+       "       'i94mode', 'i94addr', 'depdate', 'i94bir', 'i94visa', 'count',\n",
+       "       'dtadfile', 'visapost', 'occup', 'entdepa', 'entdepd', 'entdepu',\n",
+       "       'matflag', 'biryear', 'dtaddto', 'gender', 'insnum', 'airline',\n",
+       "       'admnum', 'fltno', 'visatype'],\n",
+       "      dtype='object')"
+      ]
+     },
+     "execution_count": 90,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df_i94.columns"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 91,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>cicid</th>\n",
+       "      <th>i94yr</th>\n",
+       "      <th>i94mon</th>\n",
+       "      <th>i94cit</th>\n",
+       "      <th>i94res</th>\n",
+       "      <th>i94port</th>\n",
+       "      <th>arrdate</th>\n",
+       "      <th>i94mode</th>\n",
+       "      <th>i94addr</th>\n",
+       "      <th>depdate</th>\n",
+       "      <th>...</th>\n",
+       "      <th>entdepu</th>\n",
+       "      <th>matflag</th>\n",
+       "      <th>biryear</th>\n",
+       "      <th>dtaddto</th>\n",
+       "      <th>gender</th>\n",
+       "      <th>insnum</th>\n",
+       "      <th>airline</th>\n",
+       "      <th>admnum</th>\n",
+       "      <th>fltno</th>\n",
+       "      <th>visatype</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>6.0</td>\n",
+       "      <td>2016.0</td>\n",
+       "      <td>4.0</td>\n",
+       "      <td>692.0</td>\n",
+       "      <td>692.0</td>\n",
+       "      <td>XXX</td>\n",
+       "      <td>20573.0</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>...</td>\n",
+       "      <td>U</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>1979.0</td>\n",
+       "      <td>10282016</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>1.897628e+09</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>B2</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>1</th>\n",
+       "      <td>7.0</td>\n",
+       "      <td>2016.0</td>\n",
+       "      <td>4.0</td>\n",
+       "      <td>254.0</td>\n",
+       "      <td>276.0</td>\n",
+       "      <td>ATL</td>\n",
+       "      <td>20551.0</td>\n",
+       "      <td>1.0</td>\n",
+       "      <td>AL</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>...</td>\n",
+       "      <td>Y</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>1991.0</td>\n",
+       "      <td>D/S</td>\n",
+       "      <td>M</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>3.736796e+09</td>\n",
+       "      <td>00296</td>\n",
+       "      <td>F1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>2</th>\n",
+       "      <td>15.0</td>\n",
+       "      <td>2016.0</td>\n",
+       "      <td>4.0</td>\n",
+       "      <td>101.0</td>\n",
+       "      <td>101.0</td>\n",
+       "      <td>WAS</td>\n",
+       "      <td>20545.0</td>\n",
+       "      <td>1.0</td>\n",
+       "      <td>MI</td>\n",
+       "      <td>20691.0</td>\n",
+       "      <td>...</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>M</td>\n",
+       "      <td>1961.0</td>\n",
+       "      <td>09302016</td>\n",
+       "      <td>M</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>OS</td>\n",
+       "      <td>6.666432e+08</td>\n",
+       "      <td>93</td>\n",
+       "      <td>B2</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>3</th>\n",
+       "      <td>16.0</td>\n",
+       "      <td>2016.0</td>\n",
+       "      <td>4.0</td>\n",
+       "      <td>101.0</td>\n",
+       "      <td>101.0</td>\n",
+       "      <td>NYC</td>\n",
+       "      <td>20545.0</td>\n",
+       "      <td>1.0</td>\n",
+       "      <td>MA</td>\n",
+       "      <td>20567.0</td>\n",
+       "      <td>...</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>M</td>\n",
+       "      <td>1988.0</td>\n",
+       "      <td>09302016</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>AA</td>\n",
+       "      <td>9.246846e+10</td>\n",
+       "      <td>00199</td>\n",
+       "      <td>B2</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>4</th>\n",
+       "      <td>17.0</td>\n",
+       "      <td>2016.0</td>\n",
+       "      <td>4.0</td>\n",
+       "      <td>101.0</td>\n",
+       "      <td>101.0</td>\n",
+       "      <td>NYC</td>\n",
+       "      <td>20545.0</td>\n",
+       "      <td>1.0</td>\n",
+       "      <td>MA</td>\n",
+       "      <td>20567.0</td>\n",
+       "      <td>...</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>M</td>\n",
+       "      <td>2012.0</td>\n",
+       "      <td>09302016</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>AA</td>\n",
+       "      <td>9.246846e+10</td>\n",
+       "      <td>00199</td>\n",
+       "      <td>B2</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "<p>5 rows × 28 columns</p>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "   cicid   i94yr  i94mon  i94cit  i94res i94port  arrdate  i94mode i94addr  \\\n",
+       "0    6.0  2016.0     4.0   692.0   692.0     XXX  20573.0      NaN     NaN   \n",
+       "1    7.0  2016.0     4.0   254.0   276.0     ATL  20551.0      1.0      AL   \n",
+       "2   15.0  2016.0     4.0   101.0   101.0     WAS  20545.0      1.0      MI   \n",
+       "3   16.0  2016.0     4.0   101.0   101.0     NYC  20545.0      1.0      MA   \n",
+       "4   17.0  2016.0     4.0   101.0   101.0     NYC  20545.0      1.0      MA   \n",
+       "\n",
+       "   depdate   ...     entdepu  matflag  biryear   dtaddto gender insnum  \\\n",
+       "0      NaN   ...           U      NaN   1979.0  10282016    NaN    NaN   \n",
+       "1      NaN   ...           Y      NaN   1991.0       D/S      M    NaN   \n",
+       "2  20691.0   ...         NaN        M   1961.0  09302016      M    NaN   \n",
+       "3  20567.0   ...         NaN        M   1988.0  09302016    NaN    NaN   \n",
+       "4  20567.0   ...         NaN        M   2012.0  09302016    NaN    NaN   \n",
+       "\n",
+       "  airline        admnum  fltno visatype  \n",
+       "0     NaN  1.897628e+09    NaN       B2  \n",
+       "1     NaN  3.736796e+09  00296       F1  \n",
+       "2      OS  6.666432e+08     93       B2  \n",
+       "3      AA  9.246846e+10  00199       B2  \n",
+       "4      AA  9.246846e+10  00199       B2  \n",
+       "\n",
+       "[5 rows x 28 columns]"
+      ]
+     },
+     "execution_count": 91,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df_i94.head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 205,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "fname2 = '../../data2/GlobalLandTemperaturesByCity.csv'\n",
+    "df_temp = pd.read_csv(fname2)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 206,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "(8599212, 7)"
+      ]
+     },
+     "execution_count": 206,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df_temp.shape"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 207,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Index(['dt', 'AverageTemperature', 'AverageTemperatureUncertainty', 'City',\n",
+       "       'Country', 'Latitude', 'Longitude'],\n",
+       "      dtype='object')"
+      ]
+     },
+     "execution_count": 207,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df_temp.columns"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 208,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>dt</th>\n",
+       "      <th>AverageTemperature</th>\n",
+       "      <th>AverageTemperatureUncertainty</th>\n",
+       "      <th>City</th>\n",
+       "      <th>Country</th>\n",
+       "      <th>Latitude</th>\n",
+       "      <th>Longitude</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>1743-11-01</td>\n",
+       "      <td>6.068</td>\n",
+       "      <td>1.737</td>\n",
+       "      <td>Århus</td>\n",
+       "      <td>Denmark</td>\n",
+       "      <td>57.05N</td>\n",
+       "      <td>10.33E</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>1</th>\n",
+       "      <td>1743-12-01</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>Århus</td>\n",
+       "      <td>Denmark</td>\n",
+       "      <td>57.05N</td>\n",
+       "      <td>10.33E</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>2</th>\n",
+       "      <td>1744-01-01</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>Århus</td>\n",
+       "      <td>Denmark</td>\n",
+       "      <td>57.05N</td>\n",
+       "      <td>10.33E</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>3</th>\n",
+       "      <td>1744-02-01</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>Århus</td>\n",
+       "      <td>Denmark</td>\n",
+       "      <td>57.05N</td>\n",
+       "      <td>10.33E</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>4</th>\n",
+       "      <td>1744-03-01</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>Århus</td>\n",
+       "      <td>Denmark</td>\n",
+       "      <td>57.05N</td>\n",
+       "      <td>10.33E</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "           dt  AverageTemperature  AverageTemperatureUncertainty   City  \\\n",
+       "0  1743-11-01               6.068                          1.737  Århus   \n",
+       "1  1743-12-01                 NaN                            NaN  Århus   \n",
+       "2  1744-01-01                 NaN                            NaN  Århus   \n",
+       "3  1744-02-01                 NaN                            NaN  Århus   \n",
+       "4  1744-03-01                 NaN                            NaN  Århus   \n",
+       "\n",
+       "   Country Latitude Longitude  \n",
+       "0  Denmark   57.05N    10.33E  \n",
+       "1  Denmark   57.05N    10.33E  \n",
+       "2  Denmark   57.05N    10.33E  \n",
+       "3  Denmark   57.05N    10.33E  \n",
+       "4  Denmark   57.05N    10.33E  "
+      ]
+     },
+     "execution_count": 208,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df_temp.head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 211,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Country      City        \n",
+       "Afghanistan  Baglan          2169\n",
+       "             Gardez          2169\n",
+       "             Jalalabad       2169\n",
+       "             Kabul           2169\n",
+       "             Qunduz          2169\n",
+       "             Herat           2115\n",
+       "             Gazni           2112\n",
+       "             Qandahar        2053\n",
+       "Albania      Durrës          3239\n",
+       "             Elbasan         3239\n",
+       "             Tirana          3239\n",
+       "Algeria      Algiers         3129\n",
+       "             Constantine     3129\n",
+       "             Médéa           3129\n",
+       "             Wahran          3129\n",
+       "             Warqla          3129\n",
+       "Angola       Luanda          1893\n",
+       "             Benguela        1878\n",
+       "             Huambo          1878\n",
+       "             Kuito           1878\n",
+       "             Lobito          1878\n",
+       "             Lubango         1878\n",
+       "Argentina    Concordia       2181\n",
+       "             Corrientes      2181\n",
+       "             Formosa         2181\n",
+       "             Lambaré         2181\n",
+       "             Posadas         2181\n",
+       "             Resistencia     2181\n",
+       "             Bahia Blanca    1901\n",
+       "             Catamarca       1901\n",
+       "                             ... \n",
+       "Vietnam      Soc Trang       2265\n",
+       "             Vinh            2265\n",
+       "             Vinh Long       2265\n",
+       "             Vung Tau        2265\n",
+       "             Cam Pha         2085\n",
+       "             Ha Noi          2085\n",
+       "             Hai Phong       2085\n",
+       "             Hanoi           2085\n",
+       "             Hong Gai        2085\n",
+       "             Hòa Bình        2085\n",
+       "             Nam Dinh        2085\n",
+       "             Thanh Hóa       2085\n",
+       "             Thái Nguyên     2085\n",
+       "Yemen        Ibb             1797\n",
+       "             Aden            1653\n",
+       "Zambia       Chingola        1965\n",
+       "             Kabwe           1965\n",
+       "             Kitwe           1965\n",
+       "             Luanshya        1965\n",
+       "             Lusaka          1965\n",
+       "             Mufulira        1965\n",
+       "             Ndola           1965\n",
+       "             Livingstone     1881\n",
+       "Zimbabwe     Bulawayo        1965\n",
+       "             Chitungwiza     1965\n",
+       "             Gweru           1965\n",
+       "             Harare          1965\n",
+       "             Kadoma          1965\n",
+       "             Kwekwe          1965\n",
+       "             Mutare          1965\n",
+       "Name: City, Length: 3490, dtype: int64"
+      ]
+     },
+     "execution_count": 211,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df_temp.groupby('Country')['City'].value_counts()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Read Data Directly into Spark\n",
+    "1. I94 Data read into pyspark df\n",
+    "2. Temperature Data read into pyspark df\n",
+    "3. I94 Correct Label File into pyspark df"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 100,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "from pyspark.sql import SparkSession\n",
+    "spark = SparkSession.builder.\\\n",
+    "config(\"spark.jars.packages\",\"saurfang:spark-sas7bdat:2.0.0-s_2.11\")\\\n",
+    ".enableHiveSupport().getOrCreate()\n",
+    "df_spark =spark.read.format('com.github.saurfang.sas.spark').load('../../data/18-83510-I94-Data-2016/i94_apr16_sub.sas7bdat')\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 101,
+   "metadata": {
+    "collapsed": true,
+    "jupyter": {
+     "outputs_hidden": true
+    }
+   },
+   "outputs": [
+    {
+     "ename": "AnalysisException",
+     "evalue": "'path file:/home/workspace/sas_data already exists.;'",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[0;31mPy4JJavaError\u001b[0m                             Traceback (most recent call last)",
+      "\u001b[0;32m/opt/spark-2.4.3-bin-hadoop2.7/python/pyspark/sql/utils.py\u001b[0m in \u001b[0;36mdeco\u001b[0;34m(*a, **kw)\u001b[0m\n\u001b[1;32m     62\u001b[0m         \u001b[0;32mtry\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 63\u001b[0;31m             \u001b[0;32mreturn\u001b[0m \u001b[0mf\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0ma\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m**\u001b[0m\u001b[0mkw\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     64\u001b[0m         \u001b[0;32mexcept\u001b[0m \u001b[0mpy4j\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mprotocol\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mPy4JJavaError\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0me\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m/opt/spark-2.4.3-bin-hadoop2.7/python/lib/py4j-0.10.7-src.zip/py4j/protocol.py\u001b[0m in \u001b[0;36mget_return_value\u001b[0;34m(answer, gateway_client, target_id, name)\u001b[0m\n\u001b[1;32m    327\u001b[0m                     \u001b[0;34m\"An error occurred while calling {0}{1}{2}.\\n\"\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 328\u001b[0;31m                     format(target_id, \".\", name), value)\n\u001b[0m\u001b[1;32m    329\u001b[0m             \u001b[0;32melse\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;31mPy4JJavaError\u001b[0m: An error occurred while calling o596.parquet.\n: org.apache.spark.sql.AnalysisException: path file:/home/workspace/sas_data already exists.;\n\tat org.apache.spark.sql.execution.datasources.InsertIntoHadoopFsRelationCommand.run(InsertIntoHadoopFsRelationCommand.scala:114)\n\tat org.apache.spark.sql.execution.command.DataWritingCommandExec.sideEffectResult$lzycompute(commands.scala:104)\n\tat org.apache.spark.sql.execution.command.DataWritingCommandExec.sideEffectResult(commands.scala:102)\n\tat org.apache.spark.sql.execution.command.DataWritingCommandExec.doExecute(commands.scala:122)\n\tat org.apache.spark.sql.execution.SparkPlan$$anonfun$execute$1.apply(SparkPlan.scala:131)\n\tat org.apache.spark.sql.execution.SparkPlan$$anonfun$execute$1.apply(SparkPlan.scala:127)\n\tat org.apache.spark.sql.execution.SparkPlan$$anonfun$executeQuery$1.apply(SparkPlan.scala:155)\n\tat org.apache.spark.rdd.RDDOperationScope$.withScope(RDDOperationScope.scala:151)\n\tat org.apache.spark.sql.execution.SparkPlan.executeQuery(SparkPlan.scala:152)\n\tat org.apache.spark.sql.execution.SparkPlan.execute(SparkPlan.scala:127)\n\tat org.apache.spark.sql.execution.QueryExecution.toRdd$lzycompute(QueryExecution.scala:80)\n\tat org.apache.spark.sql.execution.QueryExecution.toRdd(QueryExecution.scala:80)\n\tat org.apache.spark.sql.DataFrameWriter$$anonfun$runCommand$1.apply(DataFrameWriter.scala:676)\n\tat org.apache.spark.sql.DataFrameWriter$$anonfun$runCommand$1.apply(DataFrameWriter.scala:676)\n\tat org.apache.spark.sql.execution.SQLExecution$$anonfun$withNewExecutionId$1.apply(SQLExecution.scala:78)\n\tat org.apache.spark.sql.execution.SQLExecution$.withSQLConfPropagated(SQLExecution.scala:125)\n\tat org.apache.spark.sql.execution.SQLExecution$.withNewExecutionId(SQLExecution.scala:73)\n\tat org.apache.spark.sql.DataFrameWriter.runCommand(DataFrameWriter.scala:676)\n\tat org.apache.spark.sql.DataFrameWriter.saveToV1Source(DataFrameWriter.scala:285)\n\tat org.apache.spark.sql.DataFrameWriter.save(DataFrameWriter.scala:271)\n\tat org.apache.spark.sql.DataFrameWriter.save(DataFrameWriter.scala:229)\n\tat org.apache.spark.sql.DataFrameWriter.parquet(DataFrameWriter.scala:566)\n\tat sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)\n\tat sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)\n\tat sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)\n\tat java.lang.reflect.Method.invoke(Method.java:498)\n\tat py4j.reflection.MethodInvoker.invoke(MethodInvoker.java:244)\n\tat py4j.reflection.ReflectionEngine.invoke(ReflectionEngine.java:357)\n\tat py4j.Gateway.invoke(Gateway.java:282)\n\tat py4j.commands.AbstractCommand.invokeMethod(AbstractCommand.java:132)\n\tat py4j.commands.CallCommand.execute(CallCommand.java:79)\n\tat py4j.GatewayConnection.run(GatewayConnection.java:238)\n\tat java.lang.Thread.run(Thread.java:748)\n",
+      "\nDuring handling of the above exception, another exception occurred:\n",
+      "\u001b[0;31mAnalysisException\u001b[0m                         Traceback (most recent call last)",
+      "\u001b[0;32m<ipython-input-101-9814a8024ab4>\u001b[0m in \u001b[0;36m<module>\u001b[0;34m()\u001b[0m\n\u001b[1;32m      1\u001b[0m \u001b[0;31m#write to parquet\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m----> 2\u001b[0;31m \u001b[0mdf_spark\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mwrite\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mparquet\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m\"sas_data\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      3\u001b[0m \u001b[0mdf_spark\u001b[0m\u001b[0;34m=\u001b[0m\u001b[0mspark\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mread\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mparquet\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m\"sas_data\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m/opt/spark-2.4.3-bin-hadoop2.7/python/pyspark/sql/readwriter.py\u001b[0m in \u001b[0;36mparquet\u001b[0;34m(self, path, mode, partitionBy, compression)\u001b[0m\n\u001b[1;32m    837\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mpartitionBy\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mpartitionBy\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    838\u001b[0m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_set_opts\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcompression\u001b[0m\u001b[0;34m=\u001b[0m\u001b[0mcompression\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 839\u001b[0;31m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_jwrite\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mparquet\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mpath\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    840\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    841\u001b[0m     \u001b[0;34m@\u001b[0m\u001b[0msince\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m1.6\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m/opt/spark-2.4.3-bin-hadoop2.7/python/lib/py4j-0.10.7-src.zip/py4j/java_gateway.py\u001b[0m in \u001b[0;36m__call__\u001b[0;34m(self, *args)\u001b[0m\n\u001b[1;32m   1255\u001b[0m         \u001b[0manswer\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mgateway_client\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msend_command\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcommand\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m   1256\u001b[0m         return_value = get_return_value(\n\u001b[0;32m-> 1257\u001b[0;31m             answer, self.gateway_client, self.target_id, self.name)\n\u001b[0m\u001b[1;32m   1258\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m   1259\u001b[0m         \u001b[0;32mfor\u001b[0m \u001b[0mtemp_arg\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mtemp_args\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m/opt/spark-2.4.3-bin-hadoop2.7/python/pyspark/sql/utils.py\u001b[0m in \u001b[0;36mdeco\u001b[0;34m(*a, **kw)\u001b[0m\n\u001b[1;32m     67\u001b[0m                                              e.java_exception.getStackTrace()))\n\u001b[1;32m     68\u001b[0m             \u001b[0;32mif\u001b[0m \u001b[0ms\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstartswith\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m'org.apache.spark.sql.AnalysisException: '\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 69\u001b[0;31m                 \u001b[0;32mraise\u001b[0m \u001b[0mAnalysisException\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0ms\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msplit\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m': '\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;36m1\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mstackTrace\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     70\u001b[0m             \u001b[0;32mif\u001b[0m \u001b[0ms\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstartswith\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m'org.apache.spark.sql.catalyst.analysis'\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     71\u001b[0m                 \u001b[0;32mraise\u001b[0m \u001b[0mAnalysisException\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0ms\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msplit\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m': '\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;36m1\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mstackTrace\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;31mAnalysisException\u001b[0m: 'path file:/home/workspace/sas_data already exists.;'"
+     ]
+    }
+   ],
+   "source": [
+    "#write to parquet\n",
+    "df_spark.write.parquet(\"sas_data\")\n",
+    "df_spark=spark.read.parquet(\"sas_data\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 102,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- cicid: double (nullable = true)\n",
+      " |-- i94yr: double (nullable = true)\n",
+      " |-- i94mon: double (nullable = true)\n",
+      " |-- i94cit: double (nullable = true)\n",
+      " |-- i94res: double (nullable = true)\n",
+      " |-- i94port: string (nullable = true)\n",
+      " |-- arrdate: double (nullable = true)\n",
+      " |-- i94mode: double (nullable = true)\n",
+      " |-- i94addr: string (nullable = true)\n",
+      " |-- depdate: double (nullable = true)\n",
+      " |-- i94bir: double (nullable = true)\n",
+      " |-- i94visa: double (nullable = true)\n",
+      " |-- count: double (nullable = true)\n",
+      " |-- dtadfile: string (nullable = true)\n",
+      " |-- visapost: string (nullable = true)\n",
+      " |-- occup: string (nullable = true)\n",
+      " |-- entdepa: string (nullable = true)\n",
+      " |-- entdepd: string (nullable = true)\n",
+      " |-- entdepu: string (nullable = true)\n",
+      " |-- matflag: string (nullable = true)\n",
+      " |-- biryear: double (nullable = true)\n",
+      " |-- dtaddto: string (nullable = true)\n",
+      " |-- gender: string (nullable = true)\n",
+      " |-- insnum: string (nullable = true)\n",
+      " |-- airline: string (nullable = true)\n",
+      " |-- admnum: double (nullable = true)\n",
+      " |-- fltno: string (nullable = true)\n",
+      " |-- visatype: string (nullable = true)\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "df_i94_spark.printSchema()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 103,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+-------+------------------+\n",
+      "|summary|            i94cit|\n",
+      "+-------+------------------+\n",
+      "|  count|           3096313|\n",
+      "|   mean| 304.9069344733559|\n",
+      "| stddev|210.02688853063327|\n",
+      "|    min|             101.0|\n",
+      "|    max|             999.0|\n",
+      "+-------+------------------+\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "df_i94_spark.describe('i94cit').show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 104,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "243"
+      ]
+     },
+     "execution_count": 104,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df_i94_spark.select('i94cit').distinct().count()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 105,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "df_temp_spark = (spark.read.format(\"csv\").options(header=\"true\")\n",
+    "    .load(fname2))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 106,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- dt: string (nullable = true)\n",
+      " |-- AverageTemperature: string (nullable = true)\n",
+      " |-- AverageTemperatureUncertainty: string (nullable = true)\n",
+      " |-- City: string (nullable = true)\n",
+      " |-- Country: string (nullable = true)\n",
+      " |-- Latitude: string (nullable = true)\n",
+      " |-- Longitude: string (nullable = true)\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "df_temp_spark.printSchema()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Step 2: Explore and Assess the Data\n",
+    "#### Explore the Data \n",
+    "All valid entries for destination city codes are stored in `I94_SAS_Labels_Description_Valid.txt`. All cities from the I94 immigration data and temperature data is filtered through the valid cities list. Other cleaning steps are listed below. \n",
+    "\n",
+    "#### Cleaning Steps\n",
+    "Document steps necessary to clean the data. Data quality issues include, \n",
+    "\n",
+    "1. Remove Missing values (NaN)\n",
+    "2. Duplicate data\n",
+    "3. Invalid Data Values (SAS Label Descriptions)\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 238,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# format txt document into clean, usable dictionary/list\n",
+    "valid_port = {}\n",
+    "list_of_dicts = []\n",
+    "\n",
+    "with open('I94_SAS_Labels_Description_Valid.txt') as file:\n",
+    "    for line in file:\n",
+    "        line = line.strip()\n",
+    "        key, val = line.split('=')\n",
+    "        val_list = val.split(',')\n",
+    "        valid_port[key] = val_list\n",
+    "        for city in val_list:\n",
+    "            city = city.strip()\n",
+    "            valid_port_dict = {}\n",
+    "            valid_port_dict['i94port'] = key\n",
+    "            valid_port_dict['portcity'] = city\n",
+    "            list_of_dicts.append(valid_port_dict)\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 239,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "myJson = sc.parallelize(list_of_dicts)\n",
+    "port_df = sqlContext.read.json(myJson)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Clean and Filter I94 data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 157,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# I94 data (df_i94_spark) \n",
+    "# df_i94_spark_test = df_i94_spark.limit(1000) # always start practice on smaller dataset\n",
+    "\n",
+    "# drop any duplicates\n",
+    "df_i94_spark=df_i94_spark.dropDuplicates()\n",
+    "\n",
+    "# lowercase all columns to standardize text format\n",
+    "df_i94_spark = df_i94_spark.toDF(*[c.lower() for c in df_i94_spark.columns])\n",
+    "\n",
+    "df_i94_spark = df_i94_spark.filter(df_i94_spark.i94port.isin(list(valid_port.keys())))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Clean and Filter Immigration data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 241,
+   "metadata": {},
+   "outputs": [
+    {
+     "ename": "AttributeError",
+     "evalue": "'DataFrame' object has no attribute 'AverageTemperature'",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[0;31mAttributeError\u001b[0m                            Traceback (most recent call last)",
+      "\u001b[0;32m<ipython-input-241-1c493289e6c2>\u001b[0m in \u001b[0;36m<module>\u001b[0;34m()\u001b[0m\n\u001b[1;32m      3\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      4\u001b[0m \u001b[0;31m# keep non-null values for averagetemperature and city\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m----> 5\u001b[0;31m \u001b[0mdf_temp_spark\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mdf_temp_spark\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfilter\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mdf_temp_spark\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mAverageTemperature\u001b[0m \u001b[0;34m!=\u001b[0m \u001b[0;34m'NaN'\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      6\u001b[0m \u001b[0mdf_temp_spark\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mdf_temp_spark\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfilter\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mdf_temp_spark\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mCity\u001b[0m \u001b[0;34m!=\u001b[0m \u001b[0;34m'null'\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      7\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m/opt/spark-2.4.3-bin-hadoop2.7/python/pyspark/sql/dataframe.py\u001b[0m in \u001b[0;36m__getattr__\u001b[0;34m(self, name)\u001b[0m\n\u001b[1;32m   1298\u001b[0m         \u001b[0;32mif\u001b[0m \u001b[0mname\u001b[0m \u001b[0;32mnot\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mcolumns\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m   1299\u001b[0m             raise AttributeError(\n\u001b[0;32m-> 1300\u001b[0;31m                 \"'%s' object has no attribute '%s'\" % (self.__class__.__name__, name))\n\u001b[0m\u001b[1;32m   1301\u001b[0m         \u001b[0mjc\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_jdf\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mapply\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mname\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m   1302\u001b[0m         \u001b[0;32mreturn\u001b[0m \u001b[0mColumn\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mjc\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;31mAttributeError\u001b[0m: 'DataFrame' object has no attribute 'AverageTemperature'"
+     ]
+    }
+   ],
+   "source": [
+    "# City Demoographics Data (df_temp_spark)\n",
+    "# df_temp_spark_test = df_temp_spark.limit(1000) # always start practice on smaller dataset\n",
+    "\n",
+    "# keep non-null values for averagetemperature and city\n",
+    "df_temp_spark = df_temp_spark.filter(df_temp_spark.AverageTemperature != 'NaN')\n",
+    "df_temp_spark = df_temp_spark.filter(df_temp_spark.City != 'null')\n",
+    "\n",
+    "# drop duplicates\n",
+    "df_temp_spark = df_temp_spark.dropDuplicates(['City', 'Country'])\n",
+    "\n",
+    "# lowercase all columns to standardize text format\n",
+    "df_temp_spark = df_temp_spark.toDF(*[c.lower() for c in df_temp_spark.columns])\n",
+    "\n",
+    "# use inner join to filter down to cities with ports\n",
+    "temp_final = df_temp_spark.join(port_df, df_temp_spark.city==port_df.portcity)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 242,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "['dt',\n",
+       " 'averagetemperature',\n",
+       " 'averagetemperatureuncertainty',\n",
+       " 'city',\n",
+       " 'country',\n",
+       " 'latitude',\n",
+       " 'longitude',\n",
+       " 'i94port',\n",
+       " 'portcity']"
+      ]
+     },
+     "execution_count": 242,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "temp_final.columns"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Step 3: Define the Data Model\n",
+    "#### 3.1 Conceptual Data Model\n",
+    "The data model is to create a fact table (described below) from the combination of the Immigration Data and the Temperature linked by city after being cleaned and filtered above. Selecting only the columns that are important.\n",
+    "\n",
+    "Fact Table: I94 Immigration Data and Temperature Data\n",
+    "* i94yr = 4 digit year\n",
+    "* i94mon = numeric month\n",
+    "* i94cit = 3 digit code of origin city\n",
+    "* i94port = 3 character code of destination city\n",
+    "* arrdate = arrival date\n",
+    "* i94mode = 1 digit travel code\n",
+    "* depdate = departure date\n",
+    "* i94visa = reason for immigration\n",
+    "* AverageTemperature = average temp"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### 3.2 Mapping Out Data Pipelines\n",
+    "List of steps necessary to pipeline the data into data model\n",
+    "1. Import all data and convert into same dataformat (Step 1 above)\n",
+    "2. Clean and Filter data to for every month in folder (Step 2 above)\n",
+    "3. Create Immigrant and Temperature dimension tables by selecting specific important columns\n",
+    "4. Create above Fact Table by joining two dimension gtables on filtered i94port column"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Step 4: Run Pipelines to Model the Data \n",
+    "#### 4.1 Create the data model\n",
+    "Build the data pipelines to create the data model."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 187,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Clean Immigration Data\n",
+    "# df_i94_spark\n",
+    "\n",
+    "# Extract columns for immigration dimension table\n",
+    "immig_table = df_i94_spark.select([\"i94yr\", \"i94mon\", \"i94cit\", \"i94port\", \"arrdate\", \"i94mode\", \"depdate\", \"i94visa\"])\n",
+    "\n",
+    "# Write dimension table\n",
+    "immig_table.write.mode(\"append\").partitionBy(\"i94port\").parquet(\"/results/immigration.parquet\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 243,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Clean Temperature Data\n",
+    "# df_temp_spark\n",
+    "\n",
+    "# Extract columns  for temp dimension table\n",
+    "temp_table = temp_final.select([\"averagetemperature\", \"city\", \"country\", \"latitude\", \"longitude\", \"i94port\"])\n",
+    "\n",
+    "# Write temperature dimension table\n",
+    "temp_table.write.mode(\"append\").partitionBy(\"i94port\").parquet(\"/results/temperature.parquet\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 264,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from functools import reduce\n",
+    "\n",
+    "immig_facts = immig_table.select([\"i94yr\", \"i94mon\", \"i94cit\", \"i94port\", \"arrdate\", \"depdate\", \"i94visa\"])\n",
+    "oldColumns = immig_facts.schema.names\n",
+    "newColumns = [\"year\"\n",
+    "              , \"month\"\n",
+    "              , \"city_immig\"\n",
+    "              , \"i94port_immig\"\n",
+    "              , \"arrival_date\"\n",
+    "              , \"departure_date\"\n",
+    "              , \"reason\"]\n",
+    "\n",
+    "immig_dimen_table = reduce(lambda immig_facts, idx: immig_facts.withColumnRenamed(oldColumns[idx], newColumns[idx]), range(len(oldColumns)), immig_facts)\n",
+    "\n",
+    "# Write Immigration dimension table\n",
+    "immig_dimen_table.write.mode(\"append\").partitionBy(\"i94port\").parquet(\"/results/temperature.parquet\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# FINAL TABLE\n",
+    "final_fact_table = immig_dimen_table.join(temp_table, immig_dimen_table.city_immig==temp_table.city)\n",
+    "\n",
+    "# Write fact table to parquet files partitioned by i94port\n",
+    "final_fact_table.write.mode(\"append\").partitionBy(\"i94port\").parquet(\"/results/fact.parquet\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### 4.2 Data Quality Checks\n",
+    "Explain the data quality checks you'll perform to ensure the pipeline ran as expected. These could include:\n",
+    " * Integrity constraints on the relational database (e.g., unique key, data type, etc.)\n",
+    " * Source/Count checks to ensure completeness\n",
+    " \n",
+    "Run Quality Checks"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 244,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Quality check PASSED with record count: 3\n"
+     ]
+    }
+   ],
+   "source": [
+    "def quality_check(spark_df):\n",
+    "    data_num = spark_df.count()\n",
+    "    if data_num > 0:\n",
+    "        print(\"Quality check PASSED with record count:\", data_num)\n",
+    "    else:\n",
+    "        print(\"Quality check FAILED with record count:\", data_num)\n",
+    "        \n",
+    "quality_check(immig_table)\n",
+    "quality_check(temp_table)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### 4.3 Data dictionary \n",
+    "Data dictionary for the data model providing a brief description of what the data is and where it came from. "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 267,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "['year',\n",
+       " 'month',\n",
+       " 'city_immig',\n",
+       " 'i94port_immig',\n",
+       " 'arrival_date',\n",
+       " 'departure_date',\n",
+       " 'reason',\n",
+       " 'averagetemperature',\n",
+       " 'city',\n",
+       " 'country',\n",
+       " 'latitude',\n",
+       " 'longitude',\n",
+       " 'i94port']"
+      ]
+     },
+     "execution_count": 267,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# use columns to verify and check each dimension and fact table\n",
+    "# immig_table.columns\n",
+    "# temp_table.columns\n",
+    "final_fact_table.columns"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### First Dimension: Immigration Data: Us National Tourism and Trade Office \n",
+    "`immig_table`: pyspark dataframe\n",
+    "\n",
+    "* i94yr = 4 digit year\n",
+    "* i94mon = numeric month\n",
+    "* i94cit = 3 digit code of origin city\n",
+    "* i94port = 3 character code of destination USA city\n",
+    "* arrdate = arrival date in the USA\n",
+    "* i94mode = 1 digit travel code\n",
+    "* depdate = departure date from the USA\n",
+    "* i94visa = reason for immigration\n",
+    "\n",
+    "#### Second Dimension: Temperature data: Kaggle \n",
+    "`immig_table`: pyspark dataframe\n",
+    "* averagetemperature = average temperature\n",
+    "* city = city name\n",
+    "* country = country name\n",
+    "* latitude = latitude\n",
+    "* longitude = longitude\n",
+    "* i94port = 3 character code of destination USA city\n",
+    "\n",
+    "#### Fact Table: Aggregated I94 Immigration Data and Temperature Data\n",
+    "`final_fact_table`: pyspark dataframe\n",
+    "* year = 4 digit year\n",
+    "* month = numeric month\n",
+    "* city_immig = 3 digit code of origin city\n",
+    "* i94port_immig = 3 character code of destination USA city\n",
+    "* arrival_date = arrival date in the USA\n",
+    "* departure_date = departure date from the USA\n",
+    "* reason = reason for immigration\n",
+    "* averagetemperature  = average temp\n",
+    "* city = city name\n",
+    "* country = country name\n",
+    "* latitude = latitude\n",
+    "* longitude = longitude\n",
+    "* i94port = 3 character code of destination USA city"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Step 5: Complete Project Write Up\n",
+    "1. **Clearly state the rationale for the choice of tools and technologies for the project.**\n",
+    "* This project uses PySpark which is mainly used for processing structured and semi-structured datasets. This makes it a perfect use case for data aggregated from different formats. \n",
+    "\n",
+    "2. **Propose how often the data should be updated and why.**\n",
+    "* Data should be updated monthly based on the current processing in the sas data files by month. \n",
+    "\n",
+    "3. **Write a description of how you would approach the problem differently under the following scenarios:**\n",
+    "* The data was increased by 100x.\n",
+    "    * If the data is increased by 100x's we need to reconsider the tooling. We can still use PySpark but we could not run it locally, it would probably have to be in a cluster. \n",
+    "\n",
+    "* The data populates a dashboard that must be updated on a daily basis by 7am every day.\n",
+    "    * If the data is populating a dashboard on a daily basis we would need tooling that can handle time sensitive run times and not manual processing. If data is stored in S3 buckets, it can be accessed or executed with a number of tools such as Apache Airflow, SQS services, or Lambdas that can process the ETL. \n",
+    "\n",
+    "* The database needed to be accessed by 100+ people.\n",
+    "    * Currently files are stored as parquet files in between the processing step and at the final format. To have users access these files they would need to be stored in S3 buckets so users could use Athena or in a datalakes.  "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.7.4"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
